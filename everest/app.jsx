@@ -70,14 +70,18 @@ function MainApp({ auth }){
   }, [tweaks.theme]);
 
   // Derive family (climbers) with display name + deterministic color/shape
-  const family = useMemo(() => climbersRaw.map(c => ({
-    id: c.id,
-    email: c.email,
-    name: (c.email || '').split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, m => m.toUpperCase()),
-    color: c.color || colorFromId(c.id),
-    is_admin: c.is_admin,
-    shape: shapeFromId(c.id),
-  })), [climbersRaw]);
+  const family = useMemo(() => climbersRaw.map(c => {
+    const fallback = (c.email || '').split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, m => m.toUpperCase());
+    return {
+      id: c.id,
+      email: c.email,
+      display_name: c.display_name,
+      name: (c.display_name && c.display_name.trim()) || fallback,
+      color: c.color || colorFromId(c.id),
+      is_admin: c.is_admin,
+      shape: shapeFromId(c.id),
+    };
+  }), [climbersRaw]);
 
   const currentUserId = auth.session.user.id;
   const currentClimber = family.find(f => f.id === currentUserId);
@@ -370,6 +374,8 @@ function MainApp({ auth }){
           update={(patch)=>setTweaks({...tweaks, ...patch})}
           onClose={()=>setShowTweaks(false)}
           currentEmail={auth.session.user.email}
+          currentName={currentClimber?.display_name || ''}
+          onSaveName={async (newName)=>{ await setMyDisplayName(newName); await refresh(); }}
           onSignOut={auth.signOut}
         />
       )}
@@ -579,7 +585,17 @@ function CheckpointToast({ toast, formatAlt }){
   );
 }
 
-function TweaksPanel({ tweaks, update, onClose, currentEmail, onSignOut }){
+function TweaksPanel({ tweaks, update, onClose, currentEmail, currentName, onSaveName, onSignOut }){
+  const [nameDraft, setNameDraft] = useState(currentName);
+  const [saving, setSaving] = useState(false);
+  useEffect(()=>{ setNameDraft(currentName); }, [currentName]);
+  const dirty = nameDraft.trim() !== (currentName || '').trim();
+  async function saveName(){
+    if (!dirty) return;
+    setSaving(true);
+    try { await onSaveName(nameDraft.trim()); } catch (e) { alert('Could not save: ' + (e.message || e)); }
+    setSaving(false);
+  }
   return (
     <div className="tweaks">
       <div className="tweaks-head">
@@ -596,6 +612,25 @@ function TweaksPanel({ tweaks, update, onClose, currentEmail, onSignOut }){
         )}
       </div>
       <div className="tweaks-body">
+        <div className="tweak-row">
+          <span className="lab">Your name</span>
+          <div className="name-edit">
+            <input
+              type="text"
+              value={nameDraft}
+              onChange={e=>setNameDraft(e.target.value)}
+              onKeyDown={e=>{ if (e.key==='Enter'){ e.preventDefault(); saveName(); } }}
+              placeholder="What should we call you?"
+              className="name-edit-input"
+            />
+            <button
+              type="button"
+              className="name-edit-save"
+              disabled={!dirty || saving}
+              onClick={saveName}
+            >{saving ? '…' : 'Save'}</button>
+          </div>
+        </div>
         <div className="tweak-row">
           <span className="lab">Theme</span>
           <div className="seg">

@@ -8,10 +8,15 @@ const sb = window.supabase.createClient(
 async function fetchClimbers() {
   const { data, error } = await sb
     .from('climbers')
-    .select('id, email, color, is_admin, created_at')
+    .select('id, email, display_name, color, is_admin, created_at')
     .order('created_at', { ascending: true });
   if (error) throw error;
   return data;
+}
+
+async function setMyDisplayName(name) {
+  const { error } = await sb.rpc('set_my_display_name', { new_name: name });
+  if (error) throw error;
 }
 
 async function fetchHikes() {
@@ -41,4 +46,4 @@ async function deleteHike(id) {
   if (error) throw error;
 }
 
-Object.assign(window, { sb, fetchClimbers, fetchHikes, insertHike, deleteHike });
+Object.assign(window, { sb, fetchClimbers, fetchHikes, insertHike, deleteHike, setMyDisplayName });

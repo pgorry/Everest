@@ -14,6 +14,10 @@ create table if not exists public.climbers (
   created_at timestamptz not null default now()
 );
 
+-- Display name (nullable; UI falls back to email local-part if unset).
+-- Added as a separate statement so re-runs work on existing databases.
+alter table public.climbers add column if not exists display_name text;
+
 alter table public.climbers enable row level security;
 
 drop policy if exists "climbers_select_auth" on public.climbers;
@@ -82,6 +86,25 @@ create policy "hikes_delete_own_or_admin"
     user_id = auth.uid()
     or exists (select 1 from public.climbers where id = auth.uid() and is_admin)
   );
+
+-- ---- RPC: let a user update only their own display name ----
+-- SECURITY DEFINER + scoped update means users can't change their own
+-- is_admin flag, their email, or anyone else's row.
+create or replace function public.set_my_display_name(new_name text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.climbers
+  set display_name = nullif(trim(new_name), '')
+  where id = auth.uid();
+end;
+$$;
+
+revoke all on function public.set_my_display_name(text) from public;
+grant execute on function public.set_my_display_name(text) to authenticated;
 
 -- ============================================================
 -- After your first login, make yourself admin:
