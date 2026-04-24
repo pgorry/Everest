@@ -288,3 +288,77 @@ body::after{
 
 .altitude-axis text{font-size:10px;fill:var(--ink-4);letter-spacing:.05em}
 .altitude-axis line{stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4}
+
+/* Sign in */
+.signin-wrap{min-height:100vh;display:grid;place-items:center;padding:40px 20px;position:relative;z-index:1;}
+.signin-card{
+  width:100%;max-width:400px;padding:48px 36px;
+  background:var(--paper-2);border:1px solid var(--line);border-radius:20px;
+  text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.08);
+}
+.signin-title{font-size:44px;line-height:1;margin:0 0 24px;letter-spacing:-0.02em;}
+.signin-sub{color:var(--ink-3);font-size:14px;margin:0;line-height:1.5;}
+.signin-input{
+  width:100%;padding:12px 14px;background:var(--paper);
+  border:1px solid var(--line);border-radius:12px;font-size:15px;
+}
+.signin-input:focus{border-color:var(--ink)}
+.signin-btn{width:100%;margin-top:12px;}
+.app-loading{
+  min-height:100vh;display:grid;place-items:center;
+  font-family:'Instrument Serif',serif;font-size:32px;color:var(--ink-3);
+  position:relative;z-index:1;
+}
+
+/* Error banner */
+.banner-err{
+  margin:12px 0 0;padding:10px 14px;border-radius:12px;
+  background:var(--alpen-soft);color:var(--ink);font-size:13px;
+  border:1px solid var(--alpen);
+}
+.banner-err button{color:var(--ink);font-weight:500;}
+
+/* Admin badge */
+.admin-badge{
+  font-family:'Inter',sans-serif;font-size:9px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--alpen);
+  border:1px solid var(--alpen);padding:1px 6px;border-radius:999px;
+  margin-left:8px;vertical-align:middle;
+}
+
+/* Log item — position delete button */
+.log-item{position:relative}
+.log-delete{
+  position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  opacity:0;transition:opacity .15s, color .15s, border-color .15s;
+  width:26px;height:26px;border-radius:999px;background:var(--paper);
+  border:1px solid var(--line);display:grid;place-items:center;color:var(--ink-3);
+}
+.log-item:hover .log-delete, .log-delete:focus{opacity:1}
+.log-delete:hover{color:var(--alpen);border-color:var(--alpen)}
+
+/* Hike name autocomplete */
+.autocomplete{position:relative}
+.autocomplete-list{
+  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:10;
+  background:var(--paper);border:1px solid var(--line);border-radius:12px;
+  overflow:hidden;max-height:240px;overflow-y:auto;
+  box-shadow:0 10px 30px rgba(0,0,0,.12);
+}
+.autocomplete-item{
+  display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 14px;
+  cursor:pointer;font-size:14px;border-bottom:1px solid var(--line);
+  align-items:center;
+}
+.autocomplete-item:last-child{border-bottom:0}
+.autocomplete-item:hover{background:var(--paper-2)}
+.autocomplete-item .g{font-family:'Instrument Serif',serif;font-size:16px;color:var(--ink-3)}
+
+/* Tweaks panel footer (email + sign out) */
+.tweaks-foot{
+  padding:12px 16px;border-top:1px solid var(--line);background:var(--paper-2);
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:11px;color:var(--ink-3);gap:8px;
+}
+.tweaks-foot span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tweaks-foot button{color:var(--ink);font-weight:500;text-decoration:underline;text-underline-offset:2px;flex-shrink:0;}

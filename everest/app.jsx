@@ -1,8 +1,20 @@
-// Main app — composes everything
+// Main app — auth gate + live data from Supabase.
 
-const { useState, useEffect, useMemo, useRef } = React;
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
-const SHAPE_BY_ID = { a:"triangle", b:"diamond", c:"circle", d:"square" };
+const SHAPES = ['triangle', 'diamond', 'circle', 'square'];
+const COLOR_PALETTE = [
+  '#d85a1f', '#3e6b3a', '#2f6aa8', '#8a4fa0',
+  '#b8860b', '#c0392b', '#16a085', '#7f5539',
+];
+
+function hashId(id) {
+  let h = 0;
+  for (const c of id || '') h = (h * 31 + c.charCodeAt(0)) | 0;
+  return Math.abs(h);
+}
+const colorFromId = id => COLOR_PALETTE[hashId(id) % COLOR_PALETTE.length];
+const shapeFromId = id => SHAPES[hashId(id) % SHAPES.length];
 
 function useLocalState(key, initial){
   const [v, setV] = useState(()=>{
@@ -14,45 +26,75 @@ function useLocalState(key, initial){
 }
 
 function App(){
-  const TWEAK_DEFAULTS = {
-    theme: "paper",
-    avatarStyle: "hiker",
-    units: "metric",
-  };
+  const auth = useAuth();
 
-  const [tweaks, setTweaks] = useLocalState("everest.tweaks.v2", TWEAK_DEFAULTS);
-  const [hikes, setHikes] = useLocalState("everest.hikes.v1", SEED_HIKES);
-  const [family] = useState(FAMILY_SEED.map(f => ({...f, shape: SHAPE_BY_ID[f.id]})));
+  if (auth.session === undefined) {
+    return <div className="app-loading">Everest Challenge</div>;
+  }
+  if (!auth.session) {
+    return <SignInPage signIn={auth.signIn}/>;
+  }
+  return <MainApp auth={auth}/>;
+}
+
+function MainApp({ auth }){
+  const [climbersRaw, setClimbersRaw] = useState([]);
+  const [hikes, setHikes] = useState([]);
+  const [tweaks, setTweaks] = useLocalState("everest.tweaks.v2", { theme:"paper", avatarStyle:"hiker", units:"metric" });
   const [adding, setAdding] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const [scrub, setScrub] = useState(1); // 0..1
+  const [scrub, setScrub] = useState(1);
   const [toast, setToast] = useState(null);
   const [showTweaks, setShowTweaks] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
-  // Apply theme
+  const refresh = useCallback(async () => {
+    try {
+      const [cs, hs] = await Promise.all([fetchClimbers(), fetchHikes()]);
+      setClimbersRaw(cs);
+      setHikes(hs.map(h => ({
+        id: h.id, user_id: h.user_id, name: h.name,
+        gain: h.gain_m, date: h.hiked_on,
+      })));
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(e.message || 'Failed to load');
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme', tweaks.theme);
   }, [tweaks.theme]);
 
-  function updateTweak(patch){
-    setTweaks({...tweaks, ...patch});
-  }
+  // Derive family (climbers) with display name + deterministic color/shape
+  const family = useMemo(() => climbersRaw.map(c => ({
+    id: c.id,
+    email: c.email,
+    name: (c.email || '').split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, m => m.toUpperCase()),
+    color: c.color || colorFromId(c.id),
+    is_admin: c.is_admin,
+    shape: shapeFromId(c.id),
+  })), [climbersRaw]);
 
-  // Sort hikes by date, then id
-  const sortedHikes = useMemo(()=>{
-    return [...hikes].sort((a,b) => (a.date===b.date ? a.id-b.id : a.date.localeCompare(b.date)));
-  }, [hikes]);
+  const currentUserId = auth.session.user.id;
+  const currentClimber = family.find(f => f.id === currentUserId);
+  const isAdmin = !!currentClimber?.is_admin;
 
-  // At scrub=1, all hikes count. At scrub=0, none count.
+  const sortedHikes = useMemo(() =>
+    [...hikes].sort((a,b) => (a.date===b.date ? String(a.id).localeCompare(String(b.id)) : a.date.localeCompare(b.date))),
+    [hikes]
+  );
+
   const visibleCount = Math.round(sortedHikes.length * scrub);
   const visibleHikes = sortedHikes.slice(0, visibleCount);
 
-  // Per-climber cumulative altitude up to current scrub
   const climberProgress = useMemo(()=>{
     const tally = Object.fromEntries(family.map(f=>[f.id,{alt:0,hikes:0,gain:0}]));
     for (const h of visibleHikes){
-      const t = tally[h.climberId]; if (!t) continue;
+      const t = tally[h.user_id]; if (!t) continue;
       t.alt = Math.min(SUMMIT, t.alt + h.gain);
       t.hikes++;
       t.gain += h.gain;
@@ -60,14 +102,11 @@ function App(){
     return tally;
   }, [visibleHikes, family]);
 
-  // For mountain display: climbers with current altitude
-  const climbersOnMountain = family.map(f => ({
-    ...f, alt: climberProgress[f.id].alt
-  })).sort((a,b)=> a.alt - b.alt); // lower first so higher draw on top
+  const climbersOnMountain = family
+    .map(f => ({ ...f, alt: climberProgress[f.id]?.alt || 0 }))
+    .sort((a,b)=> a.alt - b.alt);
 
-  // Stats
   const combinedAlt = Object.values(climberProgress).reduce((s,c)=>s+c.alt, 0);
-  const combinedGain = Object.values(climberProgress).reduce((s,c)=>s+c.gain, 0);
   const totalHikes = visibleHikes.length;
   const summited = Object.values(climberProgress).filter(c=>c.alt>=SUMMIT).length;
 
@@ -81,7 +120,6 @@ function App(){
     const tick = (t) => {
       const dt = (t - lastT.current)/1000;
       lastT.current = t;
-      // 8 seconds to traverse at 1x
       setScrub(prev => {
         const nxt = prev + (dt/8) * speed;
         if (nxt >= 1){ setPlaying(false); return 1; }
@@ -93,11 +131,10 @@ function App(){
     return ()=>cancelAnimationFrame(rafRef.current);
   }, [playing, speed]);
 
-  // Toast on scrub crossing checkpoints (only during replay)
+  // Toast on checkpoint crossings during replay
   const lastReachedRef = useRef({});
   useEffect(()=>{
     if (!playing) return;
-    // For each climber, find the highest checkpoint they now meet
     let newToast = null;
     for (const c of climbersOnMountain){
       const reached = CHECKPOINTS.filter(cp => cp.alt>0 && c.alt >= cp.alt).pop();
@@ -114,21 +151,35 @@ function App(){
     if (newToast) setToast(newToast);
   }, [scrub, playing]);
 
-  // Clear toast
   useEffect(()=>{
     if (!toast) return;
     const t = setTimeout(()=>setToast(null), 3000);
     return ()=>clearTimeout(t);
   }, [toast]);
 
-  function addHike({climberIds, name, gain, date}){
-    const maxId = hikes.reduce((m,h)=>Math.max(m,h.id),0);
-    const newHikes = climberIds.map((cid, i) => ({
-      id: maxId+1+i, climberId:cid, name, gain, date
-    }));
-    setHikes([...hikes, ...newHikes]);
-    setScrub(1);
+  async function handleAddHike({ name, gain, date }){
+    try {
+      await insertHike({ name, gain_m: gain, hiked_on: date });
+      await refresh();
+      setScrub(1);
+    } catch (e) {
+      alert('Could not add hike: ' + (e.message || e));
+    }
   }
+
+  async function handleDeleteHike(h){
+    const mine = h.user_id === currentUserId;
+    const who = mine ? 'this hike' : `${family.find(f=>f.id===h.user_id)?.name || 'this user'}'s hike`;
+    if (!confirm(`Delete ${who} ("${h.name}")?`)) return;
+    try {
+      await deleteHike(h.id);
+      await refresh();
+    } catch (e) {
+      alert('Could not delete: ' + (e.message || e));
+    }
+  }
+
+  const canDelete = (h) => h.user_id === currentUserId || isAdmin;
 
   const formatAlt = (m) => tweaks.units === 'imperial'
     ? `${Math.round(m * 3.28084).toLocaleString()} ft`
@@ -143,6 +194,13 @@ function App(){
         formatAlt={formatAlt}
       />
 
+      {loadError && (
+        <div className="banner-err">
+          Couldn't load data from Supabase: {loadError}.{' '}
+          <button onClick={refresh} style={{textDecoration:'underline'}}>Retry</button>
+        </div>
+      )}
+
       <section className="headline">
         <div>
           <div className="chip" style={{marginBottom:18}}>
@@ -150,7 +208,7 @@ function App(){
             The Family Everest Project · Est. 2025
           </div>
           <h1 className="serif h-title">
-            Four climbers.<br/>
+            {family.length} {family.length === 1 ? 'climber.' : 'climbers.'}<br/>
             One mountain.<br/>
             <em>8,849 meters.</em>
           </h1>
@@ -171,12 +229,11 @@ function App(){
           </div>
           <div className="h-stat">
             <div className="k">On the summit</div>
-            <div className="v tnum">{summited}<small>of {family.length}</small></div>
+            <div className="v tnum">{summited}<small>of {family.length || '—'}</small></div>
           </div>
         </div>
       </section>
 
-      {/* Mountain */}
       <div className="mountain-wrap">
         <div className="mtn-header">
           <div>
@@ -187,7 +244,7 @@ function App(){
             {family.map(f => (
               <div className="legend-item" key={f.id}>
                 <span className="legend-sw" style={{background:f.color}}/>
-                {f.name} · <span style={{color:'var(--ink-3)'}}>{formatAlt(climberProgress[f.id].alt)}</span>
+                {f.name} · <span style={{color:'var(--ink-3)'}}>{formatAlt(climberProgress[f.id]?.alt || 0)}</span>
               </div>
             ))}
           </div>
@@ -208,7 +265,6 @@ function App(){
         />
       </div>
 
-      {/* Two-column */}
       <div className="grid-2">
         <div className="card">
           <div className="card-head">
@@ -218,15 +274,18 @@ function App(){
             </div>
           </div>
           <div className="climbers">
-            {[...family].sort((a,b)=>climberProgress[b.id].alt-climberProgress[a.id].alt).map(f => {
-              const p = climberProgress[f.id];
+            {[...family].sort((a,b)=>(climberProgress[b.id]?.alt||0)-(climberProgress[a.id]?.alt||0)).map(f => {
+              const p = climberProgress[f.id] || {alt:0,hikes:0,gain:0};
               const pct = Math.min(100, (p.alt/SUMMIT)*100);
               const nextCp = CHECKPOINTS.find(cp => cp.alt > p.alt);
               return (
                 <div className="climber" key={f.id}>
                   <Avatar climber={f} style={tweaks.avatarStyle} size={48}/>
                   <div>
-                    <div className="name">{f.name}</div>
+                    <div className="name">
+                      {f.name}
+                      {f.is_admin && <span className="admin-badge">admin</span>}
+                    </div>
                     <div className="meta">
                       {p.hikes} {p.hikes===1?'hike':'hikes'} · {formatAlt(p.gain)} climbed
                       {nextCp && <> · Next: {nextCp.name}</>}
@@ -240,6 +299,12 @@ function App(){
                 </div>
               );
             })}
+            {family.length === 0 && (
+              <div className="empty">
+                <span className="serif">No climbers yet.</span>
+                Invite people via the Supabase dashboard to get started.
+              </div>
+            )}
           </div>
         </div>
 
@@ -260,7 +325,7 @@ function App(){
                 Add your first climb to get moving.
               </div>
             ) : [...sortedHikes].reverse().map(h => {
-              const c = family.find(f=>f.id===h.climberId);
+              const c = family.find(f=>f.id===h.user_id);
               if (!c) return null;
               return (
                 <div className="log-item" key={h.id}>
@@ -273,6 +338,15 @@ function App(){
                     +{formatAlt(h.gain).replace(/ (m|ft)$/, '')}
                     <small>{tweaks.units==='imperial'?'ft gain':'m gain'}</small>
                   </div>
+                  {canDelete(h) && (
+                    <button className="log-delete" onClick={()=>handleDeleteHike(h)} aria-label="Delete hike" title="Delete">
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                        <path d="M2.5 4 H13.5"/>
+                        <path d="M4 4 V13 a1 1 0 0 0 1 1 H11 a1 1 0 0 0 1 -1 V4"/>
+                        <path d="M6 4 V2.5 a0.5 0.5 0 0 1 0.5 -0.5 H9.5 a0.5 0.5 0 0 1 0.5 0.5 V4"/>
+                      </svg>
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -282,16 +356,23 @@ function App(){
 
       {adding && (
         <AddHikeModal
-          family={family}
           onClose={()=>setAdding(false)}
-          onSubmit={(data)=>{ addHike(data); setAdding(false); }}
-          avatarStyle={tweaks.avatarStyle}
+          onSubmit={(data)=>{ handleAddHike(data); setAdding(false); }}
+          hikes={sortedHikes}
         />
       )}
 
       {toast && <CheckpointToast toast={toast} formatAlt={formatAlt}/>}
 
-      {showTweaks && <TweaksPanel tweaks={tweaks} update={updateTweak} onClose={()=>setShowTweaks(false)}/>}
+      {showTweaks && (
+        <TweaksPanel
+          tweaks={tweaks}
+          update={(patch)=>setTweaks({...tweaks, ...patch})}
+          onClose={()=>setShowTweaks(false)}
+          currentEmail={auth.session.user.email}
+          onSignOut={auth.signOut}
+        />
+      )}
     </div>
   );
 }
@@ -312,7 +393,7 @@ function TopBar({ onAdd, onToggleTweaks, totalClimbed, formatAlt }){
         </div>
       </div>
       <div className="topbar-right">
-        <button className="icon-btn" onClick={onToggleTweaks} aria-label="Tweaks">
+        <button className="icon-btn" onClick={onToggleTweaks} aria-label="Settings">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -381,7 +462,6 @@ function Avatar({ climber, style, size=32 }){
       </div>
     );
   }
-  // shape
   const common = { width:s, height:s, flexShrink:0 };
   return (
     <svg style={common} viewBox="0 0 40 40">
@@ -394,21 +474,39 @@ function Avatar({ climber, style, size=32 }){
   );
 }
 
-function AddHikeModal({ family, onClose, onSubmit, avatarStyle }){
+function AddHikeModal({ onClose, onSubmit, hikes }){
   const [name, setName] = useState("");
   const [gain, setGain] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0,10));
-  const [selected, setSelected] = useState([family[0].id]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
-  function toggle(id){
-    setSelected(s => s.includes(id) ? s.filter(x=>x!==id) : [...s, id]);
+  // Deduplicated (name, gain) suggestions, from every user's past hikes.
+  const suggestions = useMemo(() => {
+    const seen = new Map();
+    for (const h of hikes) {
+      const key = h.name.toLowerCase().trim() + '|' + h.gain;
+      if (!seen.has(key)) seen.set(key, { name: h.name, gain: h.gain });
+    }
+    return [...seen.values()].sort((a,b) => a.name.localeCompare(b.name));
+  }, [hikes]);
+
+  const filtered = useMemo(() => {
+    const q = name.trim().toLowerCase();
+    if (!q) return suggestions.slice(0, 6);
+    return suggestions.filter(s => s.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [name, suggestions]);
+
+  function pick(s){
+    setName(s.name);
+    setGain(String(s.gain));
+    setShowSuggestions(false);
   }
 
   function submit(e){
     e.preventDefault();
     const g = Number(gain);
-    if (!name.trim() || !g || g <= 0 || selected.length===0) return;
-    onSubmit({ climberIds:selected, name:name.trim(), gain:g, date });
+    if (!name.trim() || !g || g <= 0) return;
+    onSubmit({ name:name.trim(), gain:g, date });
   }
 
   return (
@@ -423,22 +521,26 @@ function AddHikeModal({ family, onClose, onSubmit, avatarStyle }){
         </div>
         <div className="modal-body">
           <div className="field">
-            <label>Who climbed?</label>
-            <div className="who-picker">
-              {family.map(f => (
-                <button type="button" key={f.id}
-                  className={`who-chip ${selected.includes(f.id)?'on':''}`}
-                  onClick={()=>toggle(f.id)}>
-                  <span className="dot-av" style={{background:f.color}}>{f.name[0]}</span>
-                  {f.name}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="field">
             <label>Hike name</label>
-            <input type="text" placeholder="Mission Peak, Mt. Tam…"
-              value={name} onChange={e=>setName(e.target.value)} autoFocus/>
+            <div className="autocomplete">
+              <input type="text" placeholder="Mission Peak, Mt. Tam…"
+                value={name}
+                onChange={e=>{ setName(e.target.value); setShowSuggestions(true); }}
+                onFocus={()=>setShowSuggestions(true)}
+                onBlur={()=>setTimeout(()=>setShowSuggestions(false), 150)}
+                autoFocus
+                autoComplete="off"/>
+              {showSuggestions && filtered.length > 0 && (
+                <div className="autocomplete-list">
+                  {filtered.map((s, i) => (
+                    <div key={i} className="autocomplete-item" onMouseDown={()=>pick(s)}>
+                      <span>{s.name}</span>
+                      <span className="g">{s.gain.toLocaleString()} m</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           <div className="field">
             <label>Vertical climb</label>
@@ -477,7 +579,7 @@ function CheckpointToast({ toast, formatAlt }){
   );
 }
 
-function TweaksPanel({ tweaks, update, onClose }){
+function TweaksPanel({ tweaks, update, onClose, currentEmail, onSignOut }){
   return (
     <div className="tweaks">
       <div className="tweaks-head">
@@ -519,6 +621,12 @@ function TweaksPanel({ tweaks, update, onClose }){
           </div>
         </div>
       </div>
+      {currentEmail && (
+        <div className="tweaks-foot">
+          <span title={currentEmail}>{currentEmail}</span>
+          <button onClick={onSignOut}>Sign out</button>
+        </div>
+      )}
     </div>
   );
 }
