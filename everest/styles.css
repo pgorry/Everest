@@ -326,16 +326,34 @@ body::after{
   margin-left:8px;vertical-align:middle;
 }
 
-/* Log item — position delete button */
+/* Log item — edit + delete buttons (hover-revealed) */
 .log-item{position:relative}
-.log-delete{
-  position:absolute;right:12px;top:50%;transform:translateY(-50%);
+.log-edit, .log-delete{
+  position:absolute;top:50%;transform:translateY(-50%);
   opacity:0;transition:opacity .15s, color .15s, border-color .15s;
   width:26px;height:26px;border-radius:999px;background:var(--paper);
   border:1px solid var(--line);display:grid;place-items:center;color:var(--ink-3);
 }
-.log-item:hover .log-delete, .log-delete:focus{opacity:1}
+.log-delete{right:12px;}
+.log-edit{right:46px;}
+.log-item:hover .log-edit, .log-item:hover .log-delete,
+.log-edit:focus, .log-delete:focus{opacity:1}
+.log-edit:hover{color:var(--ink);border-color:var(--ink)}
 .log-delete:hover{color:var(--alpen);border-color:var(--alpen)}
+
+/* Repeats badge next to hike name */
+.repeats-badge{
+  display:inline-block;margin-left:8px;padding:1px 7px;
+  font-size:10px;font-weight:600;letter-spacing:.04em;
+  color:var(--alpen);border:1px solid var(--alpen);
+  border-radius:999px;vertical-align:middle;
+}
+
+/* Helper line in repeats field */
+.repeats-help{
+  margin-top:8px;font-size:12px;color:var(--ink-3);
+}
+.repeats-help b{color:var(--ink);font-weight:500;}
 
 /* Hike name autocomplete */
 .autocomplete{position:relative}

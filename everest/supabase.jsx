@@ -22,19 +22,30 @@ async function setMyDisplayName(name) {
 async function fetchHikes() {
   const { data, error } = await sb
     .from('hikes')
-    .select('id, user_id, name, gain_m, hiked_on, created_at')
+    .select('id, user_id, name, gain_m, repeats, hiked_on, created_at')
     .order('hiked_on', { ascending: true })
     .order('created_at', { ascending: true });
   if (error) throw error;
   return data;
 }
 
-async function insertHike({ name, gain_m, hiked_on }) {
+async function insertHike({ name, gain_m, repeats, hiked_on }) {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) throw new Error('Not signed in');
   const { data, error } = await sb
     .from('hikes')
-    .insert({ user_id: user.id, name, gain_m, hiked_on })
+    .insert({ user_id: user.id, name, gain_m, repeats, hiked_on })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function updateHike(id, { name, gain_m, repeats, hiked_on }) {
+  const { data, error } = await sb
+    .from('hikes')
+    .update({ name, gain_m, repeats, hiked_on })
+    .eq('id', id)
     .select()
     .single();
   if (error) throw error;
@@ -46,4 +57,4 @@ async function deleteHike(id) {
   if (error) throw error;
 }
 
-Object.assign(window, { sb, fetchClimbers, fetchHikes, insertHike, deleteHike, setMyDisplayName });
+Object.assign(window, { sb, fetchClimbers, fetchHikes, insertHike, updateHike, deleteHike, setMyDisplayName });

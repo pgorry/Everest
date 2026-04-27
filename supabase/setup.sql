@@ -61,6 +61,10 @@ create table if not exists public.hikes (
   created_at timestamptz not null default now()
 );
 
+-- Repeats: how many times this hike was done that day. Total contribution
+-- to the ascent is gain_m * repeats. Idempotent for re-runs.
+alter table public.hikes add column if not exists repeats integer not null default 1 check (repeats > 0);
+
 create index if not exists hikes_user_id_idx on public.hikes(user_id);
 create index if not exists hikes_lower_name_gain_idx on public.hikes(lower(name), gain_m);
 
@@ -83,6 +87,19 @@ create policy "hikes_delete_own_or_admin"
   on public.hikes for delete
   to authenticated
   using (
+    user_id = auth.uid()
+    or exists (select 1 from public.climbers where id = auth.uid() and is_admin)
+  );
+
+drop policy if exists "hikes_update_own_or_admin" on public.hikes;
+create policy "hikes_update_own_or_admin"
+  on public.hikes for update
+  to authenticated
+  using (
+    user_id = auth.uid()
+    or exists (select 1 from public.climbers where id = auth.uid() and is_admin)
+  )
+  with check (
     user_id = auth.uid()
     or exists (select 1 from public.climbers where id = auth.uid() and is_admin)
   );

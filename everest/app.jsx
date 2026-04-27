@@ -42,6 +42,7 @@ function MainApp({ auth }){
   const [hikes, setHikes] = useState([]);
   const [tweaks, setTweaks] = useLocalState("everest.tweaks.v2", { theme:"paper", avatarStyle:"hiker", units:"metric" });
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState(null); // hike being edited, or null
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [scrub, setScrub] = useState(1);
@@ -55,7 +56,7 @@ function MainApp({ auth }){
       setClimbersRaw(cs);
       setHikes(hs.map(h => ({
         id: h.id, user_id: h.user_id, name: h.name,
-        gain: h.gain_m, date: h.hiked_on,
+        gain: h.gain_m, repeats: h.repeats || 1, date: h.hiked_on,
       })));
       setLoadError(null);
     } catch (e) {
@@ -99,9 +100,10 @@ function MainApp({ auth }){
     const tally = Object.fromEntries(family.map(f=>[f.id,{alt:0,hikes:0,gain:0}]));
     for (const h of visibleHikes){
       const t = tally[h.user_id]; if (!t) continue;
-      t.alt = Math.min(SUMMIT, t.alt + h.gain);
+      const totalGain = h.gain * (h.repeats || 1);
+      t.alt = Math.min(SUMMIT, t.alt + totalGain);
       t.hikes++;
-      t.gain += h.gain;
+      t.gain += totalGain;
     }
     return tally;
   }, [visibleHikes, family]);
@@ -161,13 +163,22 @@ function MainApp({ auth }){
     return ()=>clearTimeout(t);
   }, [toast]);
 
-  async function handleAddHike({ name, gain, date }){
+  async function handleAddHike({ name, gain, repeats, date }){
     try {
-      await insertHike({ name, gain_m: gain, hiked_on: date });
+      await insertHike({ name, gain_m: gain, repeats, hiked_on: date });
       await refresh();
       setScrub(1);
     } catch (e) {
       alert('Could not add hike: ' + (e.message || e));
+    }
+  }
+
+  async function handleUpdateHike(id, { name, gain, repeats, date }){
+    try {
+      await updateHike(id, { name, gain_m: gain, repeats, hiked_on: date });
+      await refresh();
+    } catch (e) {
+      alert('Could not save changes: ' + (e.message || e));
     }
   }
 
@@ -184,6 +195,7 @@ function MainApp({ auth }){
   }
 
   const canDelete = (h) => h.user_id === currentUserId || isAdmin;
+  const canEdit = canDelete;
 
   const formatAlt = (m) => tweaks.units === 'imperial'
     ? `${Math.round(m * 3.28084).toLocaleString()} ft`
@@ -331,17 +343,32 @@ function MainApp({ auth }){
             ) : [...sortedHikes].reverse().map(h => {
               const c = family.find(f=>f.id===h.user_id);
               if (!c) return null;
+              const reps = h.repeats || 1;
+              const totalGain = h.gain * reps;
               return (
                 <div className="log-item" key={h.id}>
                   <div className="log-avatar" style={{background:c.color}}>{c.name[0]}</div>
                   <div>
-                    <div className="log-name">{h.name}</div>
-                    <div className="log-meta">{c.name} · {formatDate(h.date)}</div>
+                    <div className="log-name">
+                      {h.name}
+                      {reps > 1 && <span className="repeats-badge">×{reps}</span>}
+                    </div>
+                    <div className="log-meta">
+                      {c.name} · {formatDate(h.date)}
+                      {reps > 1 && <> · {formatAlt(h.gain).replace(/ (m|ft)$/, '')} {tweaks.units==='imperial'?'ft':'m'} per lap</>}
+                    </div>
                   </div>
                   <div className="log-gain">
-                    +{formatAlt(h.gain).replace(/ (m|ft)$/, '')}
+                    +{formatAlt(totalGain).replace(/ (m|ft)$/, '')}
                     <small>{tweaks.units==='imperial'?'ft gain':'m gain'}</small>
                   </div>
+                  {canEdit(h) && (
+                    <button className="log-edit" onClick={()=>setEditing(h)} aria-label="Edit hike" title="Edit">
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11.5 2.5 L13.5 4.5 L5 13 L2.5 13.5 L3 11 Z"/>
+                      </svg>
+                    </button>
+                  )}
                   {canDelete(h) && (
                     <button className="log-delete" onClick={()=>handleDeleteHike(h)} aria-label="Delete hike" title="Delete">
                       <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
@@ -359,9 +386,20 @@ function MainApp({ auth }){
       </div>
 
       {adding && (
-        <AddHikeModal
+        <HikeModal
+          mode="add"
           onClose={()=>setAdding(false)}
           onSubmit={(data)=>{ handleAddHike(data); setAdding(false); }}
+          hikes={sortedHikes}
+        />
+      )}
+
+      {editing && (
+        <HikeModal
+          mode="edit"
+          initial={editing}
+          onClose={()=>setEditing(null)}
+          onSubmit={(data)=>{ handleUpdateHike(editing.id, data); setEditing(null); }}
           hikes={sortedHikes}
         />
       )}
@@ -480,11 +518,13 @@ function Avatar({ climber, style, size=32 }){
   );
 }
 
-function AddHikeModal({ onClose, onSubmit, hikes }){
-  const [name, setName] = useState("");
-  const [gain, setGain] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().slice(0,10));
+function HikeModal({ mode = "add", initial, onClose, onSubmit, hikes }){
+  const [name, setName] = useState(initial?.name ?? "");
+  const [gain, setGain] = useState(initial ? String(initial.gain) : "");
+  const [repeats, setRepeats] = useState(initial?.repeats ? String(initial.repeats) : "1");
+  const [date, setDate] = useState(initial?.date ?? new Date().toISOString().slice(0,10));
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const isEdit = mode === "edit";
 
   // Deduplicated (name, gain) suggestions, from every user's past hikes.
   const suggestions = useMemo(() => {
@@ -511,19 +551,24 @@ function AddHikeModal({ onClose, onSubmit, hikes }){
   function submit(e){
     e.preventDefault();
     const g = Number(gain);
+    const r = Math.max(1, Math.floor(Number(repeats) || 1));
     if (!name.trim() || !g || g <= 0) return;
-    onSubmit({ name:name.trim(), gain:g, date });
+    onSubmit({ name:name.trim(), gain:g, repeats:r, date });
   }
+
+  const repsNum = Math.max(1, Math.floor(Number(repeats) || 1));
+  const gainNum = Number(gain) || 0;
+  const totalPreview = gainNum * repsNum;
 
   return (
     <div className="scrim" onClick={onClose}>
       <form className="modal" onClick={e=>e.stopPropagation()} onSubmit={submit}>
         <div className="modal-head">
           <div style={{fontSize:10, letterSpacing:'.14em', textTransform:'uppercase', color:'var(--ink-3)'}}>
-            New entry · Logbook
+            {isEdit ? 'Edit entry · Logbook' : 'New entry · Logbook'}
           </div>
-          <h2>Log a hike</h2>
-          <div className="modal-sub">Add vertical gain to your collective climb.</div>
+          <h2>{isEdit ? 'Edit hike' : 'Log a hike'}</h2>
+          <div className="modal-sub">{isEdit ? 'Update this entry.' : 'Add vertical gain to your collective climb.'}</div>
         </div>
         <div className="modal-body">
           <div className="field">
@@ -549,12 +594,26 @@ function AddHikeModal({ onClose, onSubmit, hikes }){
             </div>
           </div>
           <div className="field">
-            <label>Vertical climb</label>
+            <label>Vertical climb (per lap)</label>
             <div className="row">
               <input type="number" placeholder="e.g. 750" min="1"
                 value={gain} onChange={e=>setGain(e.target.value)}/>
               <div className="unit">meters</div>
             </div>
+          </div>
+          <div className="field">
+            <label>Repeats</label>
+            <div className="row">
+              <input type="number" min="1" step="1"
+                value={repeats}
+                onChange={e=>setRepeats(e.target.value)}/>
+              <div className="unit">× today</div>
+            </div>
+            {repsNum > 1 && gainNum > 0 && (
+              <div className="repeats-help">
+                Counts as <b>{totalPreview.toLocaleString()} m</b> toward the climb.
+              </div>
+            )}
           </div>
           <div className="field">
             <label>Date</label>
@@ -563,7 +622,7 @@ function AddHikeModal({ onClose, onSubmit, hikes }){
         </div>
         <div className="modal-foot">
           <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn accent">Add to logbook</button>
+          <button type="submit" className="btn accent">{isEdit ? 'Save changes' : 'Add to logbook'}</button>
         </div>
       </form>
     </div>
